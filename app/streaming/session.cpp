@@ -1888,6 +1888,8 @@ void Session::createExtraStreamWindows()
             continue;
         }
 
+        m_InputHandler->setExtraWindow(i, m_ExtraWindows[i]);
+
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Video stream %d ('%s') is rendering in its own window at %dx%d+%d+%d",
                     i, m_StreamConfig.videoStreams[i].hostDisplayName, w, h, x, y);
@@ -1897,6 +1899,13 @@ void Session::createExtraStreamWindows()
 
 void Session::destroyExtraStreamWindows()
 {
+    // The input handler must stop routing to these before they are destroyed.
+    for (int i = 1; i < MAX_VIDEO_STREAMS; i++) {
+        if (m_InputHandler != nullptr) {
+            m_InputHandler->setExtraWindow(i, nullptr);
+        }
+    }
+
     // Decoders go first: they pull from the connection, which is about to go away.
     for (int i = 1; i < MAX_VIDEO_STREAMS; i++) {
         delete m_ExtraDecoders[i];

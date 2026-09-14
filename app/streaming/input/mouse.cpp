@@ -4,6 +4,19 @@
 #include "SDL_compat.h"
 #include "streaming/streamutils.h"
 
+static int mouseButtonToLiButton(Uint8 sdlButton)
+{
+    switch (sdlButton)
+    {
+        case SDL_BUTTON_LEFT: return BUTTON_LEFT;
+        case SDL_BUTTON_MIDDLE: return BUTTON_MIDDLE;
+        case SDL_BUTTON_RIGHT: return BUTTON_RIGHT;
+        case SDL_BUTTON_X1: return BUTTON_X1;
+        case SDL_BUTTON_X2: return BUTTON_X2;
+        default: return 0;
+    }
+}
+
 void SdlInputHandler::handleMouseButtonEvent(SDL_MouseButtonEvent* event)
 {
     int button;
@@ -12,7 +25,25 @@ void SdlInputHandler::handleMouseButtonEvent(SDL_MouseButtonEvent* event)
         // Ignore synthetic mouse events
         return;
     }
-    else if (!isCaptureActive()) {
+
+    // A click in one of the other displays' windows lands wherever the last motion in
+    // that window put the pointer, so send the position first and then the button. These
+    // windows never take capture, so the checks below do not apply to them.
+    int extraStream = streamIndexForWindow(event->windowID);
+    if (extraStream > 0) {
+        sendExtraWindowMousePosition(extraStream, event->x, event->y);
+
+        int extraButton = mouseButtonToLiButton(event->button);
+        if (extraButton != 0) {
+            LiSendMouseButtonEvent(event->state == SDL_PRESSED ?
+                                       BUTTON_ACTION_PRESS :
+                                       BUTTON_ACTION_RELEASE,
+                                   extraButton);
+        }
+        return;
+    }
+
+    if (!isCaptureActive()) {
         if (event->button == SDL_BUTTON_LEFT && event->state == SDL_RELEASED &&
                 isMouseInVideoRegion(event->x, event->y)) {
             // Capture the mouse again if clicked when unbound.
@@ -68,14 +99,55 @@ void SdlInputHandler::handleMouseButtonEvent(SDL_MouseButtonEvent* event)
                            button);
 }
 
-void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
+void SdlInputHandler::sendExtraWindowMousePosition(int streamIndex, int x, int y)
 {
-    if (!isCaptureActive()) {
-        // Not capturing
+    SDL_Window* window = m_ExtraWindows[streamIndex];
+    if (window == nullptr) {
         return;
     }
-    else if (event->which == SDL_TOUCH_MOUSEID) {
+
+    int windowWidth, windowHeight;
+    SDL_GetWindowSize(window, &windowWidth, &windowHeight);
+
+    SDL_Rect src, dst;
+
+    src.x = src.y = 0;
+    src.w = m_StreamWidth;
+    src.h = m_StreamHeight;
+
+    dst.x = dst.y = 0;
+    dst.w = windowWidth;
+    dst.h = windowHeight;
+
+    // Same letterboxing the first window uses, so the pointer lands where it looks like
+    // it is rather than where the window happens to end.
+    StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
+
+    x = qMin(qMax(x - dst.x, 0), dst.w);
+    y = qMin(qMax(y - dst.y, 0), dst.h);
+
+    LiSendMousePositionEventForStream(streamIndex, (short)x, (short)y, dst.w, dst.h);
+}
+
+void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
+{
+    if (event->which == SDL_TOUCH_MOUSEID) {
         // Ignore synthetic mouse events
+        return;
+    }
+
+    // A window showing one of the host's other displays takes the pointer while it is
+    // simply over the window. There is nothing to capture: the first window owns the
+    // capture, the relative mouse mode and the cursor hiding, and these only ever report
+    // an absolute position on their own display.
+    int extraStream = streamIndexForWindow(event->windowID);
+    if (extraStream > 0) {
+        sendExtraWindowMousePosition(extraStream, event->x, event->y);
+        return;
+    }
+
+    if (!isCaptureActive()) {
+        // Not capturing
         return;
     }
 

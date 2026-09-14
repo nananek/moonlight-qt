@@ -35,6 +35,7 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
       m_DragButton(0),
       m_NumFingersDown(0)
 {
+    SDL_zeroa(m_ExtraWindows);
     // System keys are always captured when running without a DE
     if (!WMUtils::isRunningDesktopEnvironment()) {
         m_CaptureSystemKeysMode = StreamingPreferences::CSK_ALWAYS;
@@ -268,6 +269,25 @@ SdlInputHandler::~SdlInputHandler()
 void SdlInputHandler::setWindow(SDL_Window *window)
 {
     m_Window = window;
+}
+
+void SdlInputHandler::setExtraWindow(int streamIndex, SDL_Window *window)
+{
+    if (streamIndex > 0 && streamIndex < MAX_VIDEO_STREAMS) {
+        m_ExtraWindows[streamIndex] = window;
+    }
+}
+
+int SdlInputHandler::streamIndexForWindow(Uint32 windowId)
+{
+    for (int i = 1; i < MAX_VIDEO_STREAMS; i++) {
+        if (m_ExtraWindows[i] != nullptr && SDL_GetWindowID(m_ExtraWindows[i]) == windowId) {
+            return i;
+        }
+    }
+
+    // The first window, and anything we do not recognise, is the first stream.
+    return 0;
 }
 
 void SdlInputHandler::raiseAllKeys()

@@ -90,6 +90,14 @@ public:
 
     void setWindow(SDL_Window* window);
 
+    // Windows showing the host's other displays. They take absolute mouse input without
+    // capture, since the pointer is simply over them rather than locked to them.
+    void setExtraWindow(int streamIndex, SDL_Window* window);
+
+    int streamIndexForWindow(Uint32 windowId);
+
+    void sendExtraWindowMousePosition(int streamIndex, int x, int y);
+
     void handleKeyEvent(SDL_KeyboardEvent* event);
 
     void handleMouseButtonEvent(SDL_MouseButtonEvent* event);
@@ -204,6 +212,7 @@ private:
     Uint32 dragTimerCallback(Uint32 interval, void* param);
 
     SDL_Window* m_Window;
+    SDL_Window* m_ExtraWindows[MAX_VIDEO_STREAMS];
     bool m_MultiController;
     bool m_GamepadMouse;
     bool m_SwapMouseButtons;
