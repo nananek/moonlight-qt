@@ -187,6 +187,7 @@ private:
                        StreamingPreferences::RendererSelection renderer,
                        SDL_Window* window, int streamIndex, int videoFormat, int width, int height,
                        int frameRate, bool enableVsync, bool enableFramePacing,
+                       bool enableRenderThread,
                        bool testOnly,
                        IVideoDecoder*& chosenDecoder);
 
@@ -243,11 +244,8 @@ private:
     static
     int drSubmitDecodeUnit(PDECODE_UNIT du);
 
-    static
-    int extraStreamDrainThread(void* context);
-
-    void startExtraStreamDrains();
-    void stopExtraStreamDrains();
+    void createExtraStreamWindows();
+    void destroyExtraStreamWindows();
 
     StreamingPreferences* m_Preferences;
     bool m_IsFullScreen;
@@ -261,17 +259,11 @@ private:
     IVideoDecoder* m_VideoDecoder;
     SDL_mutex* m_DecoderLock;
 
-    // Only the first stream has a window and a decoder. The rest are pulled by these
-    // threads and discarded, because a stream nobody drains fills its decode unit queue
-    // and stalls. They go away once each stream gets its own window.
-    struct ExtraStreamDrain {
-        Session* session;
-        int streamIndex;
-        SDL_Thread* thread;
-        SDL_atomic_t frameCount;
-    };
-    ExtraStreamDrain m_ExtraStreamDrains[MAX_VIDEO_STREAMS];
-    SDL_atomic_t m_ExtraStreamsShouldQuit;
+    // Streams past the first each get a window and a decoder of their own. Index 0 is
+    // unused -- that stream is m_Window and m_VideoDecoder, which additionally carry the
+    // input handling, full-screen state and decoder reset logic these do not.
+    SDL_Window* m_ExtraWindows[MAX_VIDEO_STREAMS];
+    IVideoDecoder* m_ExtraDecoders[MAX_VIDEO_STREAMS];
     bool m_AudioDisabled;
     bool m_AudioMuted;
     Uint32 m_FullScreenFlag;

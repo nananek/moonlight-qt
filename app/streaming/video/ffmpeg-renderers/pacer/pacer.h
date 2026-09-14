@@ -37,7 +37,7 @@ public:
 
     void submitFrame(AVFrame* frame);
 
-    bool initialize(SDL_Window* window, int maxVideoFps, bool enablePacing);
+    bool initialize(SDL_Window* window, int maxVideoFps, bool enablePacing, bool enableRenderThread);
 
     void signalVsync();
 

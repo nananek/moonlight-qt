@@ -278,7 +278,7 @@ void Session::clSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlag
 bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
                             StreamingPreferences::RendererSelection renderer,
                             SDL_Window* window, int streamIndex, int videoFormat, int width, int height,
-                            int frameRate, bool enableVsync, bool enableFramePacing, bool testOnly, IVideoDecoder*& chosenDecoder)
+                            int frameRate, bool enableVsync, bool enableFramePacing, bool enableRenderThread, bool testOnly, IVideoDecoder*& chosenDecoder)
 {
     DECODER_PARAMETERS params;
 
@@ -295,6 +295,7 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     params.streamIndex = streamIndex;
     params.enableVsync = enableVsync;
     params.enableFramePacing = enableFramePacing;
+    params.enableRenderThread = enableRenderThread;
     params.testOnly = testOnly;
     params.vds = vds;
     params.renderer = renderer;
@@ -410,7 +411,7 @@ void Session::getDecoderInfo(SDL_Window* window,
     if (chooseDecoder(StreamingPreferences::VDS_FORCE_HARDWARE,
                       StreamingPreferences::RS_PROBE_ONLY,
                       window, 0, VIDEO_FORMAT_H265_MAIN10, 1920, 1080, 60,
-                      false, false, true, decoder)) {
+                      false, false, true, true, decoder)) {
         isHardwareAccelerated = decoder->isHardwareAccelerated();
         isFullScreenOnly = decoder->isAlwaysFullScreen();
         isHdrSupported = decoder->isHdrSupported();
@@ -424,7 +425,7 @@ void Session::getDecoderInfo(SDL_Window* window,
     if (chooseDecoder(StreamingPreferences::VDS_FORCE_HARDWARE,
                       StreamingPreferences::RS_PROBE_ONLY,
                       window, 0, VIDEO_FORMAT_AV1_MAIN10, 1920, 1080, 60,
-                      false, false, true, decoder)) {
+                      false, false, true, true, decoder)) {
         // If we've got a working AV1 Main 10-bit decoder, we'll enable the HDR checkbox
         // but we will still continue probing to get other attributes for HEVC or H.264
         // decoders. See the AV1 comment at the top of the function for more info.
@@ -437,11 +438,11 @@ void Session::getDecoderInfo(SDL_Window* window,
         if (chooseDecoder(StreamingPreferences::VDS_FORCE_SOFTWARE,
                           StreamingPreferences::RS_PROBE_ONLY,
                           window, 0, VIDEO_FORMAT_H265_MAIN10, 1920, 1080, 60,
-                          false, false, true, decoder) ||
+                          false, false, true, true, decoder) ||
             chooseDecoder(StreamingPreferences::VDS_FORCE_SOFTWARE,
                           StreamingPreferences::RS_PROBE_ONLY,
                           window, 0, VIDEO_FORMAT_AV1_MAIN10, 1920, 1080, 60,
-                          false, false, true, decoder)) {
+                          false, false, true, true, decoder)) {
             isHdrSupported = decoder->isHdrSupported();
             delete decoder;
         }
@@ -456,7 +457,7 @@ void Session::getDecoderInfo(SDL_Window* window,
     if (chooseDecoder(StreamingPreferences::VDS_FORCE_HARDWARE,
                       StreamingPreferences::RS_PROBE_ONLY,
                       window, 0, VIDEO_FORMAT_H265, 1920, 1080, 60,
-                      false, false, true, decoder)) {
+                      false, false, true, true, decoder)) {
         isHardwareAccelerated = decoder->isHardwareAccelerated();
         isFullScreenOnly = decoder->isAlwaysFullScreen();
         maxResolution = decoder->getDecoderMaxResolution();
@@ -470,7 +471,7 @@ void Session::getDecoderInfo(SDL_Window* window,
     if (chooseDecoder(StreamingPreferences::VDS_FORCE_HARDWARE,
                       StreamingPreferences::RS_PROBE_ONLY,
                       window, 0, VIDEO_FORMAT_AV1_MAIN8, 1920, 1080, 60,
-                      false, false, true, decoder)) {
+                      false, false, true, true, decoder)) {
         isHardwareAccelerated = decoder->isHardwareAccelerated();
         isFullScreenOnly = decoder->isAlwaysFullScreen();
         maxResolution = decoder->getDecoderMaxResolution();
@@ -485,7 +486,7 @@ void Session::getDecoderInfo(SDL_Window* window,
     if (chooseDecoder(StreamingPreferences::VDS_AUTO,
                       StreamingPreferences::RS_PROBE_ONLY,
                       window, 0, VIDEO_FORMAT_H264, 1920, 1080, 60,
-                      false, false, true, decoder)) {
+                      false, false, true, true, decoder)) {
         isHardwareAccelerated = decoder->isHardwareAccelerated();
         isFullScreenOnly = decoder->isAlwaysFullScreen();
         maxResolution = decoder->getDecoderMaxResolution();
@@ -508,7 +509,7 @@ Session::getDecoderAvailability(SDL_Window* window,
     if (!chooseDecoder(vds,
                        StreamingPreferences::RS_PROBE_ONLY,
                        window, 0, videoFormat, width, height, frameRate,
-                       false, false, true, decoder)) {
+                       false, false, true, true, decoder)) {
         return DecoderAvailability::None;
     }
 
@@ -534,7 +535,7 @@ bool Session::populateDecoderProperties(SDL_Window* window)
                        m_StreamConfig.width,
                        m_StreamConfig.height,
                        m_StreamConfig.fps,
-                       false, false, true, decoder)) {
+                       false, false, true, true, decoder)) {
         return false;
     }
 
@@ -596,8 +597,8 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_AudioSampleCount(0),
       m_DropAudioEndTime(0)
 {
-    SDL_zeroa(m_ExtraStreamDrains);
-    SDL_AtomicSet(&m_ExtraStreamsShouldQuit, 0);
+    SDL_zeroa(m_ExtraWindows);
+    SDL_zeroa(m_ExtraDecoders);
 }
 
 Session::~Session()
@@ -1300,9 +1301,6 @@ private:
         // LiStartConnection() and LiStopConnection().
         SDL_assert(m_Session->m_VideoDecoder == nullptr);
 
-        // Stop pulling the streams we do not render before the connection goes away.
-        m_Session->stopExtraStreamDrains();
-
         // Finish cleanup of the connection state
         LiStopConnection();
 
@@ -1750,69 +1748,79 @@ bool Session::startConnectionAsync()
         return false;
     }
 
-    startExtraStreamDrains();
-
     emit connectionStarted();
     return true;
 }
 
-int Session::extraStreamDrainThread(void* context)
+
+void Session::createExtraStreamWindows()
 {
-    auto drain = (ExtraStreamDrain*)context;
-
-    while (!SDL_AtomicGet(&drain->session->m_ExtraStreamsShouldQuit)) {
-        VIDEO_FRAME_HANDLE handle;
-        PDECODE_UNIT du;
-
-        if (!LiWaitForNextVideoFrame(drain->streamIndex, &handle, &du)) {
-            // Either we are being torn down or the stream ended.
+    // The host sends every stream at the negotiated size, so the values drSetup()
+    // recorded for the first stream describe these too.
+    for (int i = 1; i < m_StreamConfig.videoStreamCount; i++) {
+        if (m_ExtraWindows[i] != nullptr) {
             continue;
         }
 
-        SDL_AtomicAdd(&drain->frameCount, 1);
-        LiCompleteVideoFrame(handle, DR_OK);
-    }
+        int x, y, w, h;
+        SDL_GetWindowPosition(m_Window, &x, &y);
+        SDL_GetWindowSize(m_Window, &w, &h);
 
-    return 0;
-}
+        // Half scale, stacked to the right of the first window. The host's own monitor
+        // layout is in /serverinfo and belongs here eventually, but a client cannot read
+        // it yet, so simply putting each display somewhere visible will do.
+        w /= 2;
+        h /= 2;
+        x += w + (i * 32);
+        y += i * 32;
 
-void Session::startExtraStreamDrains()
-{
-    SDL_AtomicSet(&m_ExtraStreamsShouldQuit, 0);
-
-    for (int i = 1; i < m_StreamConfig.videoStreamCount; i++) {
-        m_ExtraStreamDrains[i].session = this;
-        m_ExtraStreamDrains[i].streamIndex = i;
-        SDL_AtomicSet(&m_ExtraStreamDrains[i].frameCount, 0);
-
-        char name[32];
-        snprintf(name, sizeof(name), "VideoDrain%d", i);
-        m_ExtraStreamDrains[i].thread = SDL_CreateThread(extraStreamDrainThread, name,
-                                                         &m_ExtraStreamDrains[i]);
-        if (m_ExtraStreamDrains[i].thread == nullptr) {
+        std::string windowName = QString(m_Computer->name + QString(" - display %1").arg(i)).toStdString();
+        m_ExtraWindows[i] = SDL_CreateWindow(windowName.c_str(), x, y, w, h, SDL_WINDOW_RESIZABLE);
+        if (m_ExtraWindows[i] == nullptr) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "Failed to create drain thread for video stream %d: %s",
+                         "Failed to create a window for video stream %d: %s",
                          i, SDL_GetError());
-        }
-    }
-}
-
-void Session::stopExtraStreamDrains()
-{
-    SDL_AtomicSet(&m_ExtraStreamsShouldQuit, 1);
-
-    for (int i = 1; i < m_StreamConfig.videoStreamCount; i++) {
-        if (m_ExtraStreamDrains[i].thread == nullptr) {
             continue;
         }
 
-        LiWakeWaitForVideoFrame(i);
-        SDL_WaitThread(m_ExtraStreamDrains[i].thread, nullptr);
-        m_ExtraStreamDrains[i].thread = nullptr;
+        // Every decoder renders on the main thread while more than one stream is live.
+        // Two libplacebo Vulkan renderers drawing at once from their own Pacer render
+        // threads segfault inside the NVIDIA driver, so the rendering is serialized
+        // instead. The first stream's decoder is created without a render thread for the
+        // same reason; see the videoStreamCount test at its chooseDecoder() call.
+        if (!chooseDecoder(m_Preferences->videoDecoderSelection,
+                           m_Preferences->rendererSelection,
+                           m_ExtraWindows[i], i, m_ActiveVideoFormat, m_ActiveVideoWidth,
+                           m_ActiveVideoHeight, m_ActiveVideoFrameRate,
+                           // No V-sync or frame pacing: those pace against the display this
+                           // window happens to sit on, and only the first stream drives that.
+                           // No render thread either -- see createExtraStreamWindows()'s note.
+                           false, false, false, false,
+                           m_ExtraDecoders[i])) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "Failed to create a decoder for video stream %d", i);
+            SDL_DestroyWindow(m_ExtraWindows[i]);
+            m_ExtraWindows[i] = nullptr;
+            continue;
+        }
 
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Video stream %d delivered %d frames (discarded, no window yet)",
-                    i, SDL_AtomicGet(&m_ExtraStreamDrains[i].frameCount));
+                    "Video stream %d is rendering in its own window", i);
+        LiRequestIdrFrame(i);
+    }
+}
+
+void Session::destroyExtraStreamWindows()
+{
+    // Decoders go first: they pull from the connection, which is about to go away.
+    for (int i = 1; i < MAX_VIDEO_STREAMS; i++) {
+        delete m_ExtraDecoders[i];
+        m_ExtraDecoders[i] = nullptr;
+
+        if (m_ExtraWindows[i] != nullptr) {
+            SDL_DestroyWindow(m_ExtraWindows[i]);
+            m_ExtraWindows[i] = nullptr;
+        }
     }
 }
 
@@ -2104,8 +2112,15 @@ void Session::exec()
         case SDL_USEREVENT:
             switch (event.user.code) {
             case SDL_CODE_FRAME_READY:
+                // The event says a frame is ready, not which stream it belongs to, so
+                // offer it to every decoder. One with nothing pending does nothing.
                 if (m_VideoDecoder != nullptr) {
                     m_VideoDecoder->renderFrameOnMainThread();
+                }
+                for (int i = 1; i < MAX_VIDEO_STREAMS; i++) {
+                    if (m_ExtraDecoders[i] != nullptr) {
+                        m_ExtraDecoders[i]->renderFrameOnMainThread();
+                    }
                 }
                 break;
             case SDL_CODE_FLUSH_WINDOW_EVENT_BARRIER:
@@ -2142,6 +2157,12 @@ void Session::exec()
             break;
 
         case SDL_WINDOWEVENT:
+            // Everything below is about the first stream's window -- its size resets that
+            // decoder, its focus drives input capture. The extra windows have none of that.
+            if (m_Window == nullptr || event.window.windowID != SDL_GetWindowID(m_Window)) {
+                break;
+            }
+
             // Early handling of some events
             switch (event.window.event) {
             case SDL_WINDOWEVENT_FOCUS_LOST:
@@ -2314,6 +2335,7 @@ void Session::exec()
                                    m_ActiveVideoHeight, m_ActiveVideoFrameRate,
                                    enableVsync,
                                    enableVsync && m_Preferences->framePacing,
+                                   m_StreamConfig.videoStreamCount == 1,
                                    false,
                                    s_ActiveSession->m_VideoDecoder)) {
                     SDL_UnlockMutex(m_DecoderLock);
@@ -2322,6 +2344,11 @@ void Session::exec()
                     emit displayLaunchError(tr("Unable to initialize video decoder. Please check your streaming settings and try again."));
                     goto DispatchDeferredCleanup;
                 }
+
+                // The extra streams are already arriving by now; give them somewhere to
+                // go. Done here because this is where the negotiated video format is
+                // known to be settled.
+                createExtraStreamWindows();
 
                 // As of SDL 2.0.12, SDL_RecreateWindow() doesn't carry over mouse capture
                 // or mouse hiding state to the new window. By capturing after the decoder
@@ -2433,6 +2460,8 @@ DispatchDeferredCleanup:
     // NB: This must happen before LiStopConnection() for pull-based
     // decoders.
     SDL_LockMutex(m_DecoderLock);
+    destroyExtraStreamWindows();
+
     delete m_VideoDecoder;
     m_VideoDecoder = nullptr;
     SDL_UnlockMutex(m_DecoderLock);
