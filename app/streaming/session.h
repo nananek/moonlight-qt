@@ -245,6 +245,7 @@ private:
     int drSubmitDecodeUnit(PDECODE_UNIT du);
 
     const NvHostDisplay* findHostDisplay(const char* name);
+    bool computeStreamWindowLayout(SDL_Rect* layout);
     void createExtraStreamWindows();
     void destroyExtraStreamWindows();
 

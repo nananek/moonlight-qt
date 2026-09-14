@@ -1768,8 +1768,71 @@ const NvHostDisplay* Session::findHostDisplay(const char* name)
     return nullptr;
 }
 
+bool Session::computeStreamWindowLayout(SDL_Rect* layout)
+{
+    const NvHostDisplay* displays[MAX_VIDEO_STREAMS] = {};
+    int count = m_StreamConfig.videoStreamCount;
+
+    // Every display has to be described, or the arrangement has a hole in it and there is
+    // nothing faithful to reproduce.
+    for (int i = 0; i < count; i++) {
+        displays[i] = findHostDisplay(m_StreamConfig.videoStreams[i].hostDisplayName);
+        if (displays[i] == nullptr || displays[i]->width <= 0 || displays[i]->height <= 0) {
+            return false;
+        }
+    }
+
+    // Bounding box of the host's arrangement, in host desktop pixels.
+    int left = displays[0]->posX, top = displays[0]->posY;
+    int right = left + displays[0]->width, bottom = top + displays[0]->height;
+    for (int i = 1; i < count; i++) {
+        left = qMin(left, displays[i]->posX);
+        top = qMin(top, displays[i]->posY);
+        right = qMax(right, displays[i]->posX + displays[i]->width);
+        bottom = qMax(bottom, displays[i]->posY + displays[i]->height);
+    }
+
+    SDL_Rect usable;
+    if (SDL_GetDisplayUsableBounds(SDL_GetWindowDisplayIndex(m_Window), &usable) != 0) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Cannot read the display bounds to lay the stream windows out: %s",
+                    SDL_GetError());
+        return false;
+    }
+
+    // Shrink the whole arrangement until it fits, never enlarge it: a host desktop that
+    // already fits is shown at its own size.
+    double scale = qMin(1.0, qMin((double)usable.w / (right - left),
+                                  (double)usable.h / (bottom - top)));
+
+    // Centre what is left over so the arrangement does not hug one corner.
+    int originX = usable.x + (int)((usable.w - (right - left) * scale) / 2);
+    int originY = usable.y + (int)((usable.h - (bottom - top) * scale) / 2);
+
+    for (int i = 0; i < count; i++) {
+        layout[i].x = originX + (int)((displays[i]->posX - left) * scale);
+        layout[i].y = originY + (int)((displays[i]->posY - top) * scale);
+        layout[i].w = (int)(displays[i]->width * scale);
+        layout[i].h = (int)(displays[i]->height * scale);
+    }
+
+    return true;
+}
+
 void Session::createExtraStreamWindows()
 {
+    SDL_Rect layout[MAX_VIDEO_STREAMS];
+    bool haveLayout = computeStreamWindowLayout(layout);
+
+    // The first window is part of the arrangement too, so it moves with the rest --
+    // otherwise the scaled layout is built around a window sized to something else and
+    // the result runs off the screen. A full-screen window is left alone: the user asked
+    // for it to cover a display and the extra windows will simply sit on top.
+    if (haveLayout && !(SDL_GetWindowFlags(m_Window) & SDL_WINDOW_FULLSCREEN_DESKTOP)) {
+        SDL_SetWindowSize(m_Window, layout[0].w, layout[0].h);
+        SDL_SetWindowPosition(m_Window, layout[0].x, layout[0].y);
+    }
+
     // The host sends every stream at the negotiated size, so the values drSetup()
     // recorded for the first stream describe these too.
     for (int i = 1; i < m_StreamConfig.videoStreamCount; i++) {
@@ -1778,24 +1841,17 @@ void Session::createExtraStreamWindows()
         }
 
         int x, y, w, h;
-        SDL_GetWindowPosition(m_Window, &x, &y);
-        SDL_GetWindowSize(m_Window, &w, &h);
-
-        // Mirror the host's desktop arrangement where it told us one: place this window
-        // relative to the first at the same scale the first window is drawn at. Hosts
-        // whose capture backend reports no geometry send zeroes, and those fall back to
-        // stacking the windows so they at least land somewhere visible.
-        const NvHostDisplay* self = findHostDisplay(m_StreamConfig.videoStreams[i].hostDisplayName);
-        const NvHostDisplay* first = findHostDisplay(m_StreamConfig.videoStreams[0].hostDisplayName);
-
-        if (self != nullptr && first != nullptr && self->width > 0 && first->width > 0) {
-            double scale = (double)w / first->width;
-            x += (int)((self->posX - first->posX) * scale);
-            y += (int)((self->posY - first->posY) * scale);
-            w = (int)(self->width * scale);
-            h = (int)(self->height * scale);
+        if (haveLayout) {
+            x = layout[i].x;
+            y = layout[i].y;
+            w = layout[i].w;
+            h = layout[i].h;
         }
         else {
+            // The host told us nothing about where its displays are, so just put each
+            // window somewhere visible.
+            SDL_GetWindowPosition(m_Window, &x, &y);
+            SDL_GetWindowSize(m_Window, &w, &h);
             w /= 2;
             h /= 2;
             x += w + (i * 32);
