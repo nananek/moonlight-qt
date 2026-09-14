@@ -244,6 +244,7 @@ private:
     static
     int drSubmitDecodeUnit(PDECODE_UNIT du);
 
+    const NvHostDisplay* findHostDisplay(const char* name);
     void createExtraStreamWindows();
     void destroyExtraStreamWindows();
 

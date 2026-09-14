@@ -96,6 +96,7 @@ public:
     QString gfeVersion;
     QString appVersion;
     QVector<NvDisplayMode> displayModes;
+    QVector<NvHostDisplay> hostDisplays;
     int maxLumaPixelsHEVC;
     int serverCodecModeSupport;
     QString gpuModel;

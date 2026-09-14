@@ -1753,6 +1753,21 @@ bool Session::startConnectionAsync()
 }
 
 
+const NvHostDisplay* Session::findHostDisplay(const char* name)
+{
+    if (name == nullptr || name[0] == '\0') {
+        return nullptr;
+    }
+
+    for (const NvHostDisplay& display : m_Computer->hostDisplays) {
+        if (display.name == QString::fromUtf8(name)) {
+            return &display;
+        }
+    }
+
+    return nullptr;
+}
+
 void Session::createExtraStreamWindows()
 {
     // The host sends every stream at the negotiated size, so the values drSetup()
@@ -1766,13 +1781,26 @@ void Session::createExtraStreamWindows()
         SDL_GetWindowPosition(m_Window, &x, &y);
         SDL_GetWindowSize(m_Window, &w, &h);
 
-        // Half scale, stacked to the right of the first window. The host's own monitor
-        // layout is in /serverinfo and belongs here eventually, but a client cannot read
-        // it yet, so simply putting each display somewhere visible will do.
-        w /= 2;
-        h /= 2;
-        x += w + (i * 32);
-        y += i * 32;
+        // Mirror the host's desktop arrangement where it told us one: place this window
+        // relative to the first at the same scale the first window is drawn at. Hosts
+        // whose capture backend reports no geometry send zeroes, and those fall back to
+        // stacking the windows so they at least land somewhere visible.
+        const NvHostDisplay* self = findHostDisplay(m_StreamConfig.videoStreams[i].hostDisplayName);
+        const NvHostDisplay* first = findHostDisplay(m_StreamConfig.videoStreams[0].hostDisplayName);
+
+        if (self != nullptr && first != nullptr && self->width > 0 && first->width > 0) {
+            double scale = (double)w / first->width;
+            x += (int)((self->posX - first->posX) * scale);
+            y += (int)((self->posY - first->posY) * scale);
+            w = (int)(self->width * scale);
+            h = (int)(self->height * scale);
+        }
+        else {
+            w /= 2;
+            h /= 2;
+            x += w + (i * 32);
+            y += i * 32;
+        }
 
         std::string windowName = QString(m_Computer->name + QString(" - display %1").arg(i)).toStdString();
         m_ExtraWindows[i] = SDL_CreateWindow(windowName.c_str(), x, y, w, h, SDL_WINDOW_RESIZABLE);
@@ -1805,7 +1833,8 @@ void Session::createExtraStreamWindows()
         }
 
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Video stream %d is rendering in its own window", i);
+                    "Video stream %d ('%s') is rendering in its own window at %dx%d+%d+%d",
+                    i, m_StreamConfig.videoStreams[i].hostDisplayName, w, h, x, y);
         LiRequestIdrFrame(i);
     }
 }

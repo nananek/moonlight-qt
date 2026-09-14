@@ -297,6 +297,71 @@ NvHTTP::getDisplayModeList(QString serverInfo)
     return modes;
 }
 
+QVector<NvHostDisplay>
+NvHTTP::getHostDisplayList(QString serverInfo)
+{
+    QXmlStreamReader xmlReader(serverInfo);
+    QVector<NvHostDisplay> displays;
+
+    // Scoped deliberately: <Width> and <Height> also appear under <DisplayMode>, so this
+    // walks into <Displays> and reads only what is inside it.
+    while (!xmlReader.atEnd()) {
+        if (xmlReader.readNext() != QXmlStreamReader::StartElement) {
+            continue;
+        }
+        if (!XML_NAME_EQUALS(xmlReader.name(), "Displays")) {
+            continue;
+        }
+
+        while (xmlReader.readNextStartElement()) {
+            if (!XML_NAME_EQUALS(xmlReader.name(), "Display")) {
+                xmlReader.skipCurrentElement();
+                continue;
+            }
+
+            NvHostDisplay display;
+            while (xmlReader.readNextStartElement()) {
+                auto name = xmlReader.name();
+                if (XML_NAME_EQUALS(name, "Name")) {
+                    display.name = xmlReader.readElementText();
+                }
+                else if (XML_NAME_EQUALS(name, "FriendlyName")) {
+                    display.friendlyName = xmlReader.readElementText();
+                }
+                else if (XML_NAME_EQUALS(name, "Width")) {
+                    display.width = xmlReader.readElementText().toInt();
+                }
+                else if (XML_NAME_EQUALS(name, "Height")) {
+                    display.height = xmlReader.readElementText().toInt();
+                }
+                else if (XML_NAME_EQUALS(name, "RefreshRateX100")) {
+                    display.refreshRateX100 = xmlReader.readElementText().toInt();
+                }
+                else if (XML_NAME_EQUALS(name, "PosX")) {
+                    display.posX = xmlReader.readElementText().toInt();
+                }
+                else if (XML_NAME_EQUALS(name, "PosY")) {
+                    display.posY = xmlReader.readElementText().toInt();
+                }
+                else if (XML_NAME_EQUALS(name, "Primary")) {
+                    display.primary = xmlReader.readElementText().toInt() != 0;
+                }
+                else {
+                    xmlReader.skipCurrentElement();
+                }
+            }
+
+            if (!display.name.isEmpty()) {
+                displays.append(display);
+            }
+        }
+
+        break;
+    }
+
+    return displays;
+}
+
 QVector<NvApp>
 NvHTTP::getAppList()
 {

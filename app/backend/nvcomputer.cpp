@@ -163,6 +163,7 @@ NvComputer::NvComputer(NvHTTP& http, QString serverInfo)
         this->maxLumaPixelsHEVC = 0;
     }
 
+    this->hostDisplays = NvHTTP::getHostDisplayList(serverInfo);
     this->displayModes = NvHTTP::getDisplayModeList(serverInfo);
     std::stable_sort(this->displayModes.begin(), this->displayModes.end(),
                      [](const NvDisplayMode& mode1, const NvDisplayMode& mode2) {
@@ -571,6 +572,7 @@ bool NvComputer::update(const NvComputer& that)
     ASSIGN_IF_CHANGED(gpuModel);
     ASSIGN_IF_CHANGED_AND_NONNULL(serverCert);
     ASSIGN_IF_CHANGED_AND_NONEMPTY(displayModes);
+    ASSIGN_IF_CHANGED_AND_NONEMPTY(hostDisplays);
 
     if (!that.appList.isEmpty()) {
         // updateAppList() handles merging client-side attributes

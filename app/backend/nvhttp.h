@@ -28,6 +28,31 @@ public:
 };
 Q_DECLARE_TYPEINFO(NvDisplayMode, Q_PRIMITIVE_TYPE);
 
+// One of the host's capturable displays, as described by /serverinfo. A client asks for
+// a display by name and uses the rest to lay its windows out like the host's desktop.
+class NvHostDisplay
+{
+public:
+    bool operator==(const NvHostDisplay& other) const
+    {
+        return name == other.name &&
+                width == other.width &&
+                height == other.height &&
+                posX == other.posX &&
+                posY == other.posY;
+    }
+
+    QString name;          // What to send as the stream's output name
+    QString friendlyName;  // Model string, or the name again when the host has none
+    int width = 0;         // Zero where the host's capture backend does not report it
+    int height = 0;
+    int refreshRateX100 = 0;
+    int posX = 0;          // Position within the host's desktop
+    int posY = 0;
+    bool primary = false;
+};
+Q_DECLARE_TYPEINFO(NvHostDisplay, Q_MOVABLE_TYPE);
+
 class GfeHttpResponseException : public std::exception
 {
 public:
@@ -181,6 +206,10 @@ public:
     static
     QVector<NvDisplayMode>
     getDisplayModeList(QString serverInfo);
+
+    static
+    QVector<NvHostDisplay>
+    getHostDisplayList(QString serverInfo);
 
     QUrl m_BaseUrlHttp;
     QUrl m_BaseUrlHttps;
