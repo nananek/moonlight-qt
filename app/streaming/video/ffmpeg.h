@@ -124,6 +124,7 @@ private:
 
     int m_LastFrameNumber;
     int m_StreamFps;
+    int m_StreamIndex;
     int m_OriginalVideoWidth;
     int m_OriginalVideoHeight;
     int m_VideoFormat;
