@@ -340,8 +340,11 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
     return false;
 }
 
-int Session::drSetup(int videoFormat, int width, int height, int frameRate, void *, int)
+int Session::drSetup(int streamIndex, int videoFormat, int width, int height, int frameRate, void *, int)
 {
+    // TODO(multi-display): one decoder and window per stream (Phase 4)
+    SDL_assert(streamIndex == 0);
+
     s_ActiveSession->m_ActiveVideoFormat = videoFormat;
     s_ActiveSession->m_ActiveVideoWidth = width;
     s_ActiveSession->m_ActiveVideoHeight = height;
@@ -2233,7 +2236,7 @@ void Session::exec()
             }
 
             // Request an IDR frame to complete the reset
-            LiRequestIdrFrame();
+            LiRequestIdrFrame(0);
 
             // Set HDR mode. We may miss the callback if we're in the middle
             // of recreating our decoder at the time the HDR transition happens.

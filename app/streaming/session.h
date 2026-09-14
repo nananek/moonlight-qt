@@ -235,10 +235,10 @@ private:
     void arDecodeAndPlaySample(char* sampleData, int sampleLength);
 
     static
-    int drSetup(int videoFormat, int width, int height, int frameRate, void*, int);
+    int drSetup(int streamIndex, int videoFormat, int width, int height, int frameRate, void*, int);
 
     static
-    void drCleanup();
+    void drCleanup(int streamIndex);
 
     static
     int drSubmitDecodeUnit(PDECODE_UNIT du);

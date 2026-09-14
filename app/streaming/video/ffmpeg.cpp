@@ -269,7 +269,7 @@ void FFmpegVideoDecoder::reset()
     // It might be touching things we're about to free.
     if (m_DecoderThread != nullptr) {
         SDL_AtomicSet(&m_DecoderThreadShouldQuit, 1);
-        LiWakeWaitForVideoFrame();
+        LiWakeWaitForVideoFrame(0);
         SDL_WaitThread(m_DecoderThread, NULL);
         SDL_AtomicSet(&m_DecoderThreadShouldQuit, 0);
         m_DecoderThread = nullptr;
@@ -1857,7 +1857,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
 
             // Waiting for input. All output frames have been received.
             // Block until we receive a new frame from the host.
-            if (!LiWaitForNextVideoFrame(&handle, &du)) {
+            if (!LiWaitForNextVideoFrame(0, &handle, &du)) {
                 // This might be a signal from the main thread to exit
                 continue;
             }
@@ -2047,7 +2047,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
 
                     // No output data, so let's try to submit more input data,
                     // while we're waiting for this to frame to come back.
-                    if (LiPollNextVideoFrame(&handle, &du)) {
+                    if (LiPollNextVideoFrame(0, &handle, &du)) {
                         // FIXME: Handle EAGAIN on avcodec_send_packet() properly?
                         LiCompleteVideoFrame(handle, submitDecodeUnit(du));
                     }
@@ -2081,7 +2081,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
 
                     // Just in case the error resulted in the loss of the frame,
                     // request an IDR frame to reset our decoder state.
-                    LiRequestIdrFrame();
+                    LiRequestIdrFrame(0);
                 }
             } while (err == AVERROR(EAGAIN) && !SDL_AtomicGet(&m_DecoderThreadShouldQuit));
 
