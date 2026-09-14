@@ -243,6 +243,12 @@ private:
     static
     int drSubmitDecodeUnit(PDECODE_UNIT du);
 
+    static
+    int extraStreamDrainThread(void* context);
+
+    void startExtraStreamDrains();
+    void stopExtraStreamDrains();
+
     StreamingPreferences* m_Preferences;
     bool m_IsFullScreen;
     SupportedVideoFormatList m_SupportedVideoFormats; // Sorted in order of descending priority
@@ -254,6 +260,18 @@ private:
     SDL_Window* m_Window;
     IVideoDecoder* m_VideoDecoder;
     SDL_mutex* m_DecoderLock;
+
+    // Only the first stream has a window and a decoder. The rest are pulled by these
+    // threads and discarded, because a stream nobody drains fills its decode unit queue
+    // and stalls. They go away once each stream gets its own window.
+    struct ExtraStreamDrain {
+        Session* session;
+        int streamIndex;
+        SDL_Thread* thread;
+        SDL_atomic_t frameCount;
+    };
+    ExtraStreamDrain m_ExtraStreamDrains[MAX_VIDEO_STREAMS];
+    SDL_atomic_t m_ExtraStreamsShouldQuit;
     bool m_AudioDisabled;
     bool m_AudioMuted;
     Uint32 m_FullScreenFlag;

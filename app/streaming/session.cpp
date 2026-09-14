@@ -342,8 +342,14 @@ bool Session::chooseDecoder(StreamingPreferences::VideoDecoderSelection vds,
 
 int Session::drSetup(int streamIndex, int videoFormat, int width, int height, int frameRate, void *, int)
 {
-    // TODO(multi-display): one decoder and window per stream (Phase 4)
-    SDL_assert(streamIndex == 0);
+    if (streamIndex != 0) {
+        // Accepted, but there is no window to draw it in yet, so a drain thread will
+        // pull its frames and discard them.
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Video stream %d is %dx%dx%d (format 0x%x), not rendered yet",
+                    streamIndex, width, height, frameRate, videoFormat);
+        return 0;
+    }
 
     s_ActiveSession->m_ActiveVideoFormat = videoFormat;
     s_ActiveSession->m_ActiveVideoWidth = width;
@@ -589,6 +595,8 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
       m_AudioSampleCount(0),
       m_DropAudioEndTime(0)
 {
+    SDL_zeroa(m_ExtraStreamDrains);
+    SDL_AtomicSet(&m_ExtraStreamsShouldQuit, 0);
 }
 
 Session::~Session()
@@ -1291,6 +1299,9 @@ private:
         // LiStartConnection() and LiStopConnection().
         SDL_assert(m_Session->m_VideoDecoder == nullptr);
 
+        // Stop pulling the streams we do not render before the connection goes away.
+        m_Session->stopExtraStreamDrains();
+
         // Finish cleanup of the connection state
         LiStopConnection();
 
@@ -1706,6 +1717,29 @@ bool Session::startConnectionAsync()
                                                                          false);
     }
 
+    // Ask for one video stream per host display named in MOONLIGHT_VIDEO_STREAMS, e.g.
+    // "DP-1,HDMI-A-1". The names come from the Displays list in /serverinfo. Only the
+    // first is rendered for now; this exists to exercise the multi-display protocol
+    // until each stream gets its own window.
+    const QString streamList = qEnvironmentVariable("MOONLIGHT_VIDEO_STREAMS");
+    if (!streamList.isEmpty()) {
+        const QStringList displayNames = streamList.split(',', Qt::SkipEmptyParts);
+
+        m_StreamConfig.videoStreamCount = qMin(displayNames.count(), MAX_VIDEO_STREAMS);
+        for (int i = 0; i < m_StreamConfig.videoStreamCount; i++) {
+            m_StreamConfig.videoStreams[i].width = m_StreamConfig.width;
+            m_StreamConfig.videoStreams[i].height = m_StreamConfig.height;
+            m_StreamConfig.videoStreams[i].fps = m_StreamConfig.fps;
+
+            const QByteArray name = displayNames.at(i).trimmed().toUtf8();
+            strncpy(m_StreamConfig.videoStreams[i].hostDisplayName, name.constData(),
+                    sizeof(m_StreamConfig.videoStreams[i].hostDisplayName) - 1);
+
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Requesting video stream %d from display '%s'",
+                        i, m_StreamConfig.videoStreams[i].hostDisplayName);
+        }
+    }
+
     int err = LiStartConnection(&hostInfo, &m_StreamConfig, &k_ConnCallbacks,
                                 &m_VideoCallbacks, &m_AudioCallbacks,
                                 NULL, 0, NULL, 0);
@@ -1715,8 +1749,70 @@ bool Session::startConnectionAsync()
         return false;
     }
 
+    startExtraStreamDrains();
+
     emit connectionStarted();
     return true;
+}
+
+int Session::extraStreamDrainThread(void* context)
+{
+    auto drain = (ExtraStreamDrain*)context;
+
+    while (!SDL_AtomicGet(&drain->session->m_ExtraStreamsShouldQuit)) {
+        VIDEO_FRAME_HANDLE handle;
+        PDECODE_UNIT du;
+
+        if (!LiWaitForNextVideoFrame(drain->streamIndex, &handle, &du)) {
+            // Either we are being torn down or the stream ended.
+            continue;
+        }
+
+        SDL_AtomicAdd(&drain->frameCount, 1);
+        LiCompleteVideoFrame(handle, DR_OK);
+    }
+
+    return 0;
+}
+
+void Session::startExtraStreamDrains()
+{
+    SDL_AtomicSet(&m_ExtraStreamsShouldQuit, 0);
+
+    for (int i = 1; i < m_StreamConfig.videoStreamCount; i++) {
+        m_ExtraStreamDrains[i].session = this;
+        m_ExtraStreamDrains[i].streamIndex = i;
+        SDL_AtomicSet(&m_ExtraStreamDrains[i].frameCount, 0);
+
+        char name[32];
+        snprintf(name, sizeof(name), "VideoDrain%d", i);
+        m_ExtraStreamDrains[i].thread = SDL_CreateThread(extraStreamDrainThread, name,
+                                                         &m_ExtraStreamDrains[i]);
+        if (m_ExtraStreamDrains[i].thread == nullptr) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "Failed to create drain thread for video stream %d: %s",
+                         i, SDL_GetError());
+        }
+    }
+}
+
+void Session::stopExtraStreamDrains()
+{
+    SDL_AtomicSet(&m_ExtraStreamsShouldQuit, 1);
+
+    for (int i = 1; i < m_StreamConfig.videoStreamCount; i++) {
+        if (m_ExtraStreamDrains[i].thread == nullptr) {
+            continue;
+        }
+
+        LiWakeWaitForVideoFrame(i);
+        SDL_WaitThread(m_ExtraStreamDrains[i].thread, nullptr);
+        m_ExtraStreamDrains[i].thread = nullptr;
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Video stream %d delivered %d frames (discarded, no window yet)",
+                    i, SDL_AtomicGet(&m_ExtraStreamDrains[i].frameCount));
+    }
 }
 
 void Session::flushWindowEvents()
