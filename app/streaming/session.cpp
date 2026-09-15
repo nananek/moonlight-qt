@@ -1739,6 +1739,16 @@ bool Session::startConnectionAsync()
         }
     }
 
+    // A plain single-display session leaves the count at 0. moonlight-common-c normalizes
+    // that only in its own copy of the configuration, while the rest of Session reads this
+    // one, so normalize it here too.
+    if (m_StreamConfig.videoStreamCount == 0) {
+        m_StreamConfig.videoStreamCount = 1;
+        m_StreamConfig.videoStreams[0].width = m_StreamConfig.width;
+        m_StreamConfig.videoStreams[0].height = m_StreamConfig.height;
+        m_StreamConfig.videoStreams[0].fps = m_StreamConfig.fps;
+    }
+
     int err = LiStartConnection(&hostInfo, &m_StreamConfig, &k_ConnCallbacks,
                                 &m_VideoCallbacks, &m_AudioCallbacks,
                                 NULL, 0, NULL, 0);
@@ -1772,6 +1782,11 @@ bool Session::computeStreamWindowLayout(SDL_Rect* layout)
 {
     const NvHostDisplay* displays[MAX_VIDEO_STREAMS] = {};
     int count = m_StreamConfig.videoStreamCount;
+
+    // The bounding box below starts from the first display, so there has to be one.
+    if (count < 1) {
+        return false;
+    }
 
     // Every display has to be described, or the arrangement has a hole in it and there is
     // nothing faithful to reproduce.
