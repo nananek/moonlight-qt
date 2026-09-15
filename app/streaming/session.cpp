@@ -1874,7 +1874,10 @@ void Session::createExtraStreamWindows()
         }
 
         std::string windowName = QString(m_Computer->name + QString(" - display %1").arg(i)).toStdString();
-        m_ExtraWindows[i] = SDL_CreateWindow(windowName.c_str(), x, y, w, h, SDL_WINDOW_RESIZABLE);
+        // High DPI like the first window, or a scaled desktop draws this one at its
+        // logical size and the compositor blows it up.
+        m_ExtraWindows[i] = SDL_CreateWindow(windowName.c_str(), x, y, w, h,
+                                             SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
         if (m_ExtraWindows[i] == nullptr) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                          "Failed to create a window for video stream %d: %s",
